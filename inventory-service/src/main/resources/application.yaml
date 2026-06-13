@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: inventory-service
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/inventory_db}
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  sql:
+    init:
+      mode: never
+      platform: mysql
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVER:localhost:29092}
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+app:
+  kafka:
+    group-id:
+      inventory-group-id: inventory-service-group
+    topics:
+      inventory-reserved: inventory-reserved-topic
+      inventory-failed: inventory-reservation-failed-topic
+      orders-created: orders-created-topic
+      orders-backup: orders-backup-topic
+      log-error: inventory-log-error-topic
+server:
+  servlet:
+    context-path: /api
+  port: 8081

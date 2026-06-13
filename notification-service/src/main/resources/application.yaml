@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: notification-service
+  data:
+    mongodb:
+      host: ${MONGO_HOST:localhost}
+      port: ${MONGO_PORT:27017}
+      database: notification_db
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:ballestasjosealberto@gmail.com}
+    password: ${MAIL_PASSWORD:vlcp stlj tavs nced}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVER:localhost:29092}
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+app:
+  kafka:
+    notification-group-id: notification-service-group
+    topics:
+      notification-confirmed: notifications-confirmed-orders-topic
+      inventory-reserved: inventory-reserved-topic
+      log-error: notifications-log-error-topic
+  mail:
+    subject: "Order Reservation Confirmation"
+
+server:
+  servlet:
+    context-path: /api
+  port: 8082

@@ -1,0 +1,143 @@
+services:
+  ### Kafka, Zookeeper, and Kafka UI
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper-dev
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - shop-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: kafka-dev
+    ports:
+      # To learn about configuring Kafka for access across networks see
+      # https://www.confluent.io/blog/kafka-client-cannot-connect-to-broker-on-aws-on-docker-etc/
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENERS: EXTERNAL_SAME_HOST://:29092,INTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL_SAME_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL_SAME_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+    networks:
+      - shop-network
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  kafka-ui:
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8088:8080"
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_JMXPORT: 9997
+    networks:
+      - shop-network
+
+  # ==================== DATABASES ====================
+
+  # MySQL for Orders Service
+  mysql-orders:
+    image: mysql:8.0
+    container_name: mysql-orders
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: orders_db
+      MYSQL_USER: orders_user
+      MYSQL_PASSWORD: orders_pass
+    volumes:
+      - mysql-orders-data:/var/lib/mysql
+    networks:
+      - shop-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL for Inventory Service
+  mysql-inventory:
+    image: mysql:8.0
+    container_name: mysql-inventory
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: inventory_db
+      MYSQL_USER: inventory_user
+      MYSQL_PASSWORD: inventory_pass
+    volumes:
+      - mysql-inventory-data:/var/lib/mysql
+    networks:
+      - shop-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL for Payment Service
+  postgres-payment:
+    image: postgres:15
+    container_name: postgres-payment-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: payment_db
+      POSTGRES_USER: payment_user
+      POSTGRES_PASSWORD: payment_pass
+    volumes:
+      - postgres-payment-data:/var/lib/postgresql/data
+    networks:
+      - shop-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB for Notification Service
+  mongodb-notification:
+    image: mongo:7.0
+    container_name: mongodb-notification
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: notification_user
+      MONGO_INITDB_ROOT_PASSWORD: notification_pass
+      MONGO_INITDB_DATABASE: notification_db
+    volumes:
+      - mongodb-notification-data:/data/db
+    networks:
+      - shop-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
+networks:
+  shop-network:
+    driver: bridge
+
+volumes:
+  kafka-data:
+  mysql-orders-data:
+  mysql-inventory-data:
+  postgres-payment-data:
+  mongodb-notification-data:

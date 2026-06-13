@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/orders_db}
+    username: ${DB_USER:root}
+    password: ${DB_PASSWORD:123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVER:localhost:29092}
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+app:
+  kafka:
+    topics:
+      orders-created: orders-created-topic
+      orders-confirmed: orders-confirmed-topic
+      orders-cancelled: orders-cancelled-topic
+      orders-completed: orders-completed-topic
+      orders-backup: orders-backup-topic
+      inventory-failed: inventory-reservation-failed-topic
+      log-error: orders-log-error-topic
+
+server:
+  servlet:
+    context-path: /api

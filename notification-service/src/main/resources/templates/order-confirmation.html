@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Confirmación de Reserva de Orden</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 620px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .header {
+            background-color: #1a73e8;
+            color: #ffffff;
+            padding: 28px 32px;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 22px;
+        }
+        .body {
+            padding: 32px;
+            color: #333333;
+        }
+        .info-block {
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+        }
+        .info-block p {
+            margin: 6px 0;
+            font-size: 14px;
+        }
+        .info-block span.label {
+            font-weight: bold;
+            color: #555555;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        thead tr {
+            background-color: #1a73e8;
+            color: #ffffff;
+        }
+        thead th {
+            padding: 10px 12px;
+            text-align: left;
+        }
+        tbody tr:nth-child(even) {
+            background-color: #f2f6ff;
+        }
+        tbody td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .total-row td {
+            font-weight: bold;
+            font-size: 15px;
+            padding-top: 14px;
+            border-top: 2px solid #1a73e8;
+            border-bottom: none;
+        }
+        .footer {
+            background-color: #f4f4f4;
+            text-align: center;
+            padding: 16px;
+            font-size: 12px;
+            color: #888888;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <div class="header">
+        <h1>&#10003; Reserva de Orden Confirmada</h1>
+        <p style="margin:8px 0 0; font-size:14px; opacity:0.9;">Tu orden ha sido reservada exitosamente.</p>
+    </div>
+
+    <div class="body">
+
+        <div class="info-block">
+            <p><span class="label">ID de Orden:</span> <span th:text="${orderId}"></span></p>
+            <p><span class="label">ID de Reserva:</span> <span th:text="${reservationId}"></span></p>
+            <p><span class="label">ID de Cliente:</span> <span th:text="${customerId}"></span></p>
+            <p><span class="label">Estado:</span> <span th:text="${status}"></span></p>
+        </div>
+
+        <h3 style="margin-bottom:12px; color:#1a73e8;">Artículos de la Orden</h3>
+        <table>
+            <thead>
+            <tr>
+                <th>ID Producto</th>
+                <th>Nombre del Producto</th>
+                <th>Cant.</th>
+                <th>Precio Unitario</th>
+                <th>Subtotal</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="item : ${items}">
+                <td th:text="${item.productId}"></td>
+                <td th:text="${item.productName}"></td>
+                <td th:text="${item.quantity}"></td>
+                <td th:text="${'$' + #numbers.formatDecimal(item.price, 1, 2)}"></td>
+                <td th:text="${'$' + #numbers.formatDecimal(item.price * item.quantity, 1, 2)}"></td>
+            </tr>
+            <tr class="total-row">
+                <td colspan="4">Monto Total</td>
+                <td th:text="${'$' + #numbers.formatDecimal(totalAmount, 1, 2)}"></td>
+            </tr>
+            </tbody>
+        </table>
+
+    </div>
+
+    <div class="footer">
+        <p>Esta es una notificación automática. Por favor, no respondas a este correo.</p>
+    </div>
+
+</div>
+</body>
+</html>
