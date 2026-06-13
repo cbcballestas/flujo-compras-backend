@@ -4,13 +4,14 @@ Sistema de gestión de órdenes basado en microservicios que implementa el **Pat
 
 ## Tecnologías
 
-- **Java 17** + **Spring Boot 3.x**
+- **Java 21** + **Spring Boot 3.5.14**
 - **Apache Kafka** (Confluent Platform 7.0.1)
+- **RabbitMQ** (comunicación interna entre componentes)
 - **Maven** (multi-módulo)
 - **MySQL 8** (order-service e inventory-service)
-- **PostgreSQL 15** (payment-service)
+- **PostgreSQL 15** (payment-service — base de datos provisionada, servicio pendiente)
 - **MongoDB 7** (notification-service)
-- **Lombok**, **MapStruct**, **JPA**
+- **Lombok 1.18.30**, **MapStruct 1.6.3**, **JPA**
 
 ---
 
@@ -26,87 +27,93 @@ infrastructure/  → Adaptadores: REST (in), Kafka consumers/producers (in/out),
 
 ### Servicios
 
-| Servicio             | Puerto | Base de Datos       | Rol                                                                  |
-|----------------------|--------|---------------------|----------------------------------------------------------------------|
-| `order-service`      | 8080   | MySQL (3306)        | Punto de entrada REST; crea órdenes y publica eventos en Kafka       |
-| `inventory-service`  | 8081   | MySQL (3307)        | Consume eventos de órdenes; reserva stock; publica éxito o fallo     |
-| `notification-service` | 8082   | MongoDB (27017)     | Consume eventos de inventario; envía notificaciones por email        |
+| Servicio               | Puerto | Base de Datos        | Rol                                                              |
+|------------------------|--------|----------------------|------------------------------------------------------------------|
+| `order-service`        | 8080   | MySQL (3306)         | Punto de entrada REST; crea órdenes y publica eventos en Kafka   |
+| `inventory-service`    | 8081   | MySQL (3307)         | Consume eventos de órdenes; reserva stock; publica éxito o fallo |
+| `notification-service` | 8082   | MongoDB (27017)      | Consume eventos de inventario; envía notificaciones por email    |
+| `payment-service`      | —      | PostgreSQL (5432)    | **No implementado** — base de datos provisionada en docker-compose |
 
 ### Diagrama de flujo
 
 ```
-┌─────────┐        REST POST /orders
-│ Cliente │ ─────────────────────────────────────────────────────────────────┐
-└─────────┘                                                                   │
+┌─────────┐        REST POST /api/orders
+│ Cliente │ ──────────────────────────────────────────────────────────────────────┐
+└─────────┘                                                                        │
+                                                                                   ▼
+                                                               ┌───────────────────────────────┐
+                                                               │         order-service          │
+                                                               │  1. Persiste orden (CREATED)   │
+                                                               │  2. ApplicationEvent           │
+                                                               │  3. OrderListener →            │
+                                                               │     publica a Kafka            │
+                                                               └──────────────┬────────────────┘
+                                                                              │
+                                                                              │ orders-created-topic
                                                                               ▼
-                                                              ┌───────────────────────────┐
-                                                              │       order-service        │
-                                                              │  1. Persiste orden (CREATED)│
-                                                              │  2. ApplicationEvent       │
-                                                              │  3. OrderListener →        │
-                                                              │     publica a Kafka        │
-                                                              └───────────┬───────────────┘
-                                                                          │
-                                                                          │ orders-created
-                                                                          ▼
-                                                              ┌───────────────────────────┐
-                                                              │     inventory-service      │
-                                                              │  1. Consume orders-created │
-                                                              │  2. Reserva stock          │
-                                                              │  3. ApplicationEvent       │
-                                                              │     ├─ ReservedInventory → │
-                                                              │     │  inventory-reserved  │
-                                                              │     └─ FailedInventory →   │
-                                                              │        inventory-failed    │
-                                                              └──────┬────────────────┬───┘
-                                                                     │                │
-                                                      inventory-reserved        inventory-failed
-                                                                     │                │
-                                                                     ▼                ▼
-                                                       ┌───────────────────┐  ┌──────────────────┐
-                                                       │notification-service│  │  order-service   │
-                                                       │ Envía email al     │  │ Actualiza orden  │
-                                                       │ cliente           │  │ a CANCELLED/FAILED│
-                                                       └───────────────────┘  └──────────────────┘
+                                                               ┌───────────────────────────────┐
+                                                               │       inventory-service        │
+                                                               │  1. Consume orders-created-topic│
+                                                               │  2. Reserva stock              │
+                                                               │  3. ApplicationEvent           │
+                                                               │     ├─ ReservedInventory →     │
+                                                               │     │  inventory-reserved-topic │
+                                                               │     └─ FailedInventory →       │
+                                                               │        inventory-reservation-  │
+                                                               │        failed-topic            │
+                                                               └──────┬───────────────────┬────┘
+                                                                      │                   │
+                                                     inventory-reserved-topic    inventory-reservation-failed-topic
+                                                                      │                   │
+                                                                      ▼                   ▼
+                                                        ┌──────────────────────┐  ┌───────────────────┐
+                                                        │ notification-service  │  │   order-service   │
+                                                        │ Envía email al cliente│  │ Actualiza orden a │
+                                                        │ (Gmail SMTP)          │  │ CANCELLED/FAILED  │
+                                                        └──────────────────────┘  └───────────────────┘
 ```
 
 ### Comunicación interna dentro de cada servicio
 
-La comunicación entre capas **no usa llamadas directas** sino `ApplicationEventPublisher` de Spring. El adaptador de salida escucha esos eventos y los traduce en mensajes Kafka:
+La comunicación entre capas **no usa llamadas directas** sino `ApplicationEventPublisher` de Spring. El adaptador de salida escucha esos eventos y los traduce en mensajes Kafka o RabbitMQ:
 
 ```
 UseCase → applicationEventPublisher.publishEvent(event)
                     ↓
          @EventListener en Listener
                     ↓
-         Adaptador Kafka → producer.send(...)
+         Adaptador Kafka/RabbitMQ → producer.send(...)
 ```
 
 ---
 
 ## Tópicos de Kafka
 
-| Tópico                  | Particiones | Productor            | Consumidor(es)                      | Descripción                                        |
-|-------------------------|-------------|----------------------|-------------------------------------|----------------------------------------------------|
-| `orders-created-topic`        | 3           | order-service        | inventory-service                   | Orden recién creada; dispara la reserva de stock   |
-| `orders-created-topic-try`    | —           | inventory-service    | inventory-service                   | Reintentos automáticos (`@RetryableTopic`)         |
-| `orders-created-topic-dlt`    | —           | inventory-service    | inventory-service (`@DltHandler`)   | Dead Letter Topic tras agotar reintentos           |
-| `orders-confirmed`      | 3           | order-service        | —                                   | Orden confirmada tras pago exitoso (futuro)        |
-| `orders-cancelled`      | 2           | order-service        | —                                   | Orden cancelada                                    |
-| `orders-completed`      | 3           | order-service        | —                                   | Orden completada                                   |
-| `inventory-reserved`    | 3           | inventory-service    | notification-service                | Stock reservado correctamente                      |
-| `inventory-failed`      | 3           | inventory-service    | order-service                       | Reserva de stock fallida                           |
-| `log-error`             | 3           | order-service, otros | —                                   | Registro de errores de publicación Kafka           |
+| Tópico                                | Particiones | Productor            | Consumidor(es)                      | Descripción                                      |
+|---------------------------------------|-------------|----------------------|-------------------------------------|--------------------------------------------------|
+| `orders-created-topic`                | 3           | order-service        | inventory-service                   | Orden recién creada; dispara la reserva de stock |
+| `orders-created-topic-try`            | —           | inventory-service    | inventory-service                   | Reintentos automáticos (`@RetryableTopic`)       |
+| `orders-created-topic-dlt`            | —           | inventory-service    | inventory-service (`@DltHandler`)   | Dead Letter Topic tras agotar reintentos         |
+| `orders-confirmed-topic`              | 3           | order-service        | —                                   | Orden confirmada (uso futuro)                    |
+| `orders-cancelled-topic`              | 2           | order-service        | —                                   | Orden cancelada                                  |
+| `orders-completed-topic`              | 3           | order-service        | —                                   | Orden completada                                 |
+| `orders-backup-topic`                 | —           | order-service        | —                                   | Respaldo de órdenes                              |
+| `inventory-reserved-topic`            | 3           | inventory-service    | notification-service                | Stock reservado correctamente                    |
+| `inventory-reservation-failed-topic`  | 3           | inventory-service    | order-service                       | Reserva de stock fallida                         |
+| `notifications-confirmed-orders-topic`| —           | notification-service | —                                   | Confirmación de notificación enviada             |
+| `orders-log-error-topic`              | 3           | order-service        | —                                   | Registro de errores de order-service             |
+| `inventory-log-error-topic`           | 3           | inventory-service    | —                                   | Registro de errores de inventory-service         |
+| `notifications-log-error-topic`       | 3           | notification-service | —                                   | Registro de errores de notification-service      |
 
 ### Estrategia de reintentos en `inventory-service`
 
 ```
-orders-created  →  [intento 1]
-                →  orders-created-try-0  (backoff 3s)
-                →  orders-created-try-1  (backoff 6s)
-                →  orders-created-dlt    (@DltHandler)
-                       ├─ si nroRetry < 3 → reenvía a orders-created con header nroRetry++
-                       └─ si nroRetry >= 3 → publica FailedInventoryEvent
+orders-created-topic  →  [intento 1]
+                      →  orders-created-topic-try-0  (backoff 3s)
+                      →  orders-created-topic-try-1  (backoff 6s)
+                      →  orders-created-topic-dlt    (@DltHandler)
+                             ├─ si nroRetry < 3 → reenvía a orders-created-topic con header nroRetry++
+                             └─ si nroRetry >= 3 → persiste en outbox + publica FailedInventoryEvent
 ```
 
 Excepciones reintentables: `NullPointerException`, `InsufficientStockException`, `ProductWithoutInventoryException`.
@@ -115,12 +122,12 @@ Excepciones reintentables: `NullPointerException`, `InsufficientStockException`,
 
 Todos los productores comparten la misma configuración para garantizar exactamente una entrega:
 
-| Propiedad                              | Valor   |
-|----------------------------------------|---------|
-| `enable.idempotence`                   | `true`  |
-| `acks`                                 | `all`   |
-| `retries`                              | `3`     |
-| `max.in.flight.requests.per.connection`| `1`     |
+| Propiedad                               | Valor   |
+|-----------------------------------------|---------|
+| `enable.idempotence`                    | `true`  |
+| `acks`                                  | `all`   |
+| `retries`                               | `3`     |
+| `max.in.flight.requests.per.connection` | `1`     |
 
 ---
 
@@ -169,20 +176,20 @@ Todos los productores comparten la misma configuración para garantizar exactame
 
 ```
 CREATED → PENDING_INVENTORY → INVENTORY_RESERVED → PENDING_PAYMENT
-                           → PAYMENT_PROCESSED → CONFIRMED → COMPLETED
-                           → CANCELLED / FAILED
+                                                 → PAYMENT_PROCESSED → CONFIRMED → COMPLETED
+        → CANCELLED / FAILED
 ```
 
 ---
 
 ## API REST — order-service
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost:8080/api`
 
 ### Crear orden
 
 ```http
-POST /orders
+POST /api/orders
 Content-Type: application/json
 
 {
@@ -219,13 +226,13 @@ Content-Type: application/json
 ### Obtener todas las órdenes
 
 ```http
-GET /orders
+GET /api/orders
 ```
 
 ### Obtener orden por ID
 
 ```http
-GET /orders/{id}
+GET /api/orders/{id}
 ```
 
 ---
@@ -235,26 +242,26 @@ GET /orders/{id}
 ### Caso 1: Orden exitosa (stock disponible)
 
 ```
-1. Cliente → POST /orders  (customerId=cust-001, 1x Laptop $1200)
+1. Cliente → POST /api/orders  (customerId=cust-001, 1x Laptop $1200)
 2. order-service persiste orden con status=CREATED
-3. order-service publica OrderCreatedEvent → orders-created
+3. order-service publica OrderCreatedEvent → orders-created-topic
 4. inventory-service consume el evento → reserva 1x Laptop
-5. inventory-service publica ReservedInventoryEvent → inventory-reserved
-6. notification-service consume inventory-reserved → envía email de confirmación al cliente
+5. inventory-service publica ReservedInventoryEvent → inventory-reserved-topic
+6. notification-service consume inventory-reserved-topic → envía email de confirmación al cliente (Gmail SMTP)
 ```
 
 ### Caso 2: Orden fallida (sin stock)
 
 ```
-1. Cliente → POST /orders  (customerId=cust-002, 10x Laptop $1200)
+1. Cliente → POST /api/orders  (customerId=cust-002, 10x Laptop $1200)
 2. order-service persiste orden con status=CREATED
-3. order-service publica OrderCreatedEvent → orders-created
+3. order-service publica OrderCreatedEvent → orders-created-topic
 4. inventory-service consume el evento → lanza InsufficientStockException
 5. @RetryableTopic reintenta 2 veces (3s y 6s de backoff)
-6. Tras agotar reintentos → orders-created-dlt
+6. Tras agotar reintentos → orders-created-topic-dlt
 7. @DltHandler reenvía hasta 3 veces con header nroRetry
-8. Tras 3 intentos en DLT → publica FailedInventoryEvent → inventory-failed
-9. order-service consume inventory-failed → actualiza orden a status=FAILED/CANCELLED
+8. Tras 3 intentos en DLT → persiste evento en outbox + publica FailedInventoryEvent → inventory-reservation-failed-topic
+9. order-service consume inventory-reservation-failed-topic → actualiza orden a status=FAILED/CANCELLED
 ```
 
 ### Caso 3: Error transitorio (NullPointerException)
@@ -262,9 +269,9 @@ GET /orders/{id}
 ```
 1. inventory-service recibe evento con datos incompletos
 2. Lanza NullPointerException (reintentable)
-3. Primer reintento → orders-created-try-0 (espera 3s)
-4. Segundo reintento → orders-created-try-1 (espera 6s)
-5. Si el error persiste → orders-created-dlt → ciclo DLT
+3. Primer reintento → orders-created-topic-try-0 (espera 3s)
+4. Segundo reintento → orders-created-topic-try-1 (espera 6s)
+5. Si el error persiste → orders-created-topic-dlt → ciclo DLT
 6. Si se resuelve en algún reintento → flujo exitoso continúa normalmente
 ```
 
@@ -278,13 +285,18 @@ GET /orders/{id}
 docker compose up -d
 ```
 
-Servicios disponibles:
-- Kafka broker: `localhost:29092`
-- Kafka UI: `http://localhost:8088`
-- MySQL (orders): `localhost:3306`
-- MySQL (inventory): `localhost:3307`
-- PostgreSQL (payment): `localhost:5432`
-- MongoDB (notification): `localhost:27017`
+Servicios disponibles tras ejecutar docker compose:
+
+| Servicio         | URL / Puerto             |
+|------------------|--------------------------|
+| Kafka broker     | `localhost:29092`        |
+| Kafka UI         | `http://localhost:8088`  |
+| MySQL (orders)   | `localhost:3306`         |
+| MySQL (inventory)| `localhost:3307`         |
+| PostgreSQL       | `localhost:5432`         |
+| MongoDB          | `localhost:27017`        |
+
+> **RabbitMQ** no está incluido en el docker-compose. Debe estar corriendo localmente en `localhost:5672` (usuario/contraseña: `guest/guest`). Instalación: https://www.rabbitmq.com/docs/download
 
 ### 2. Compilar todos los módulos
 
@@ -310,7 +322,7 @@ cd notification-service && ./mvnw spring-boot:run
 ### 4. Probar el flujo completo
 
 ```bash
-curl -X POST http://localhost:8080/orders \
+curl -X POST http://localhost:8080/api/orders \
   -H "Content-Type: application/json" \
   -d '{
     "customerId": "cust-001",
@@ -351,27 +363,35 @@ Los tests unitarios usan **JUnit 5 + Mockito + AssertJ**. Se usa `@EmbeddedKafka
 ```
 microservices/
 ├── docker-compose.yml
-├── pom.xml                          # POM raíz (multi-módulo)
+├── pom.xml                            # POM raíz (multi-módulo), Java 21, Spring Boot 3.5.14
 ├── lombok.config
 ├── order-service/
 │   └── src/main/java/.../
-│       ├── domain/                  # Order, OrderItem, OrderStatus, OrderCreatedEvent
-│       ├── application/             # CreateOrderUseCase, GetOrderUseCase, servicios
+│       ├── domain/                    # Order, OrderItem, OrderStatus, OrderCreatedEvent
+│       ├── application/               # CreateOrderUseCase, GetOrderUseCase, servicios
 │       └── infrastructure/
-│           ├── adapter/in/rest/     # OrderController
+│           ├── adapter/in/rest/       # OrderController (/api/orders)
 │           └── adapter/out/
-│               ├── messaging/       # InventoryServiceMessagingAdapter, OrderListener
-│               └── persistence/     # OrderPersistenceAdapter (JPA/MySQL)
+│               ├── messaging/         # InventoryServiceMessagingAdapter, OrderListener
+│               └── persistence/       # OrderPersistenceAdapter (JPA/MySQL)
 ├── inventory-service/
 │   └── src/main/java/.../
-│       ├── domain/                  # ReservedInventoryEvent, FailedInventoryEvent
-│       ├── application/             # InventoryMessagingPort y servicios
+│       ├── domain/                    # Inventory, InventoryReservation, ReservationStatus, eventos
+│       ├── application/               # InventoryMessagingPort, InventoryService
 │       └── infrastructure/
-│           ├── adapter/in/messaging/ # InventoryKafkaAdapter (@RetryableTopic, @DltHandler)
+│           ├── adapter/in/messaging/  # InventoryKafkaAdapter (@RetryableTopic, @DltHandler)
+│           │                          # InventoryServiceListenerImpl (RabbitMQ)
 │           └── adapter/out/
-│               ├── messaging/        # NotificationServiceMessagingAdapter, OrderServiceMessagingAdapter
-│               └── persistence/      # (JPA/MySQL)
+│               ├── messaging/         # NotificationServiceMessagingAdapter, OrderServiceMessagingAdapter
+│               └── persistence/       # InventoryPersistenceAdapter + OutboxEvent (JPA/MySQL)
 ├── notification-service/
 │   └── src/main/java/.../
-│       └── infrastructure/          # KafkaConfig, consumer de inventory-reserved
+│       ├── domain/                    # Notification, OutBoxEvent, NotificationStatus
+│       ├── application/               # NotificationService, NotificationServicePort
+│       └── infrastructure/
+│           ├── config/                # KafkaConfig, RabbitMQConfig
+│           ├── adapter/in/messaging/  # NotificationKafkaAdapter (consume inventory-reserved-topic)
+│           └── out/
+│               ├── messaging/         # NotificationSenderListener (RabbitMQ), NotificationMessageServiceImpl
+│               └── persistence/       # NotificationMongoRepository (MongoDB)
 ```
