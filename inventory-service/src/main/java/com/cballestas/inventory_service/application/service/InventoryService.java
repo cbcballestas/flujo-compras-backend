@@ -111,7 +111,7 @@ public class InventoryService implements InventoryMessagingPort {
             if (!inventory.canReserve(item.quantity())) {
                 log.warn("Insufficient stock for product {}: available={}, requested={}",
                         item.productId(), inventory.getAvailable(), item.quantity());
-                throw new InsufficientStockException("Insufficient inventory for product " + item.productId());
+                throw new InsufficientStockException("Insufficient stock for product " + item.productId());
             }
         }
         return true;
