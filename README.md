@@ -296,7 +296,22 @@ Servicios disponibles tras ejecutar docker compose:
 | RabbitMQ         | `localhost:5672`         |
 | RabbitMQ UI      | `http://localhost:15672` |
 
-### 2. Compilar todos los módulos
+### 2. Configurar credenciales de correo
+
+Edita `notification-service/src/main/resources/application.yaml` y actualiza los valores de la sección `spring.mail`:
+
+```yaml
+spring:
+  mail:
+    host: smtp.gmail.com          # servidor SMTP de tu proveedor
+    port: 587                     # puerto SMTP (587 para TLS, 465 para SSL)
+    username: tu-correo@gmail.com # dirección de correo remitente
+    password: tu-app-password     # contraseña de aplicación (no la de la cuenta)
+```
+
+> Para Gmail, genera una **contraseña de aplicación** en tu cuenta de Google: Seguridad → Verificación en dos pasos → Contraseñas de aplicación.
+
+### 3. Compilar todos los módulos
 
 ```bash
 ./mvnw clean install
@@ -304,7 +319,7 @@ Servicios disponibles tras ejecutar docker compose:
 
 > `order-service` debe compilarse primero ya que `inventory-service` depende de su JAR para el DTO `OrderCreatedEvent`.
 
-### 3. Iniciar cada servicio
+### 4. Iniciar cada servicio
 
 ```bash
 # Terminal 1
@@ -317,7 +332,7 @@ cd inventory-service && ./mvnw spring-boot:run
 cd notification-service && ./mvnw spring-boot:run
 ```
 
-### 4. Probar el flujo completo
+### 5. Probar el flujo completo
 
 ```bash
 curl -X POST http://localhost:8080/api/orders \
