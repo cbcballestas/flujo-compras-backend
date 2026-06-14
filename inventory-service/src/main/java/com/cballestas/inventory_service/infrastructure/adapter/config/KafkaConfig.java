@@ -191,7 +191,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic inventoryReservedTopic() {
         return TopicBuilder.name(inventoryReservedTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }
@@ -209,7 +209,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic inventoryFailedTopic() {
         return TopicBuilder.name(inventoryFailedTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }

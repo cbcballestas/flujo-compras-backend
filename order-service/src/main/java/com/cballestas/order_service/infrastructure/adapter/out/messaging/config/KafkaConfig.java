@@ -153,7 +153,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic ordersCreatedTopic() {
         return TopicBuilder.name(ordersCreatedTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }
@@ -169,7 +169,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic ordersConfirmedTopic() {
         return TopicBuilder.name(ordersConfirmedTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }
@@ -201,7 +201,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic ordersCompletedTopic() {
         return TopicBuilder.name(ordersCompletedTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }
@@ -217,7 +217,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic ordersErrorTopic() {
         return TopicBuilder.name(ordersErrorsTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }
@@ -233,7 +233,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic ordersBackupTopic() {
         return TopicBuilder.name(ordersBackupTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }

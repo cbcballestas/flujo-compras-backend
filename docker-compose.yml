@@ -31,8 +31,18 @@ services:
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
     networks:
       - shop-network
-    volumes:
-      - kafka-data:/var/lib/kafka/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq-dev
+    ports:
+      - "15672:15672" # Management Web UI
+      - "5672:5672"   # Default RabbitMQ Port
+    environment:
+        RABBITMQ_DEFAULT_USER: guest
+        RABBITMQ_DEFAULT_PASS: guest
+    networks:
+      - shop-network
 
   kafka-ui:
     container_name: kafka-ui
@@ -65,7 +75,7 @@ services:
     networks:
       - shop-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -86,27 +96,7 @@ services:
     networks:
       - shop-network
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # PostgreSQL for Payment Service
-  postgres-payment:
-    image: postgres:15
-    container_name: postgres-payment-db
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_DB: payment_db
-      POSTGRES_USER: payment_user
-      POSTGRES_PASSWORD: payment_pass
-    volumes:
-      - postgres-payment-data:/var/lib/postgresql/data
-    networks:
-      - shop-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U payment_user"]
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -126,17 +116,16 @@ services:
     networks:
       - shop-network
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
       retries: 5
-      
+
 networks:
   shop-network:
     driver: bridge
 
 volumes:
-  kafka-data:
   mysql-orders-data:
   mysql-inventory-data:
   postgres-payment-data:

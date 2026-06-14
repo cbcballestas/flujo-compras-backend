@@ -91,19 +91,19 @@ UseCase → applicationEventPublisher.publishEvent(event)
 
 | Tópico                                | Particiones | Productor            | Consumidor(es)                      | Descripción                                      |
 |---------------------------------------|-------------|----------------------|-------------------------------------|--------------------------------------------------|
-| `orders-created-topic`                | 3           | order-service        | inventory-service                   | Orden recién creada; dispara la reserva de stock |
+| `orders-created-topic`                | 1           | order-service        | inventory-service                   | Orden recién creada; dispara la reserva de stock |
 | `orders-created-topic-try`            | —           | inventory-service    | inventory-service                   | Reintentos automáticos (`@RetryableTopic`)       |
 | `orders-created-topic-dlt`            | —           | inventory-service    | inventory-service (`@DltHandler`)   | Dead Letter Topic tras agotar reintentos         |
-| `orders-confirmed-topic`              | 3           | order-service        | —                                   | Orden confirmada (uso futuro)                    |
+| `orders-confirmed-topic`              | 1           | order-service        | —                                   | Orden confirmada (uso futuro)                    |
 | `orders-cancelled-topic`              | 2           | order-service        | —                                   | Orden cancelada                                  |
-| `orders-completed-topic`              | 3           | order-service        | —                                   | Orden completada                                 |
-| `orders-backup-topic`                 | —           | order-service        | —                                   | Respaldo de órdenes                              |
-| `inventory-reserved-topic`            | 3           | inventory-service    | notification-service                | Stock reservado correctamente                    |
-| `inventory-reservation-failed-topic`  | 3           | inventory-service    | order-service                       | Reserva de stock fallida                         |
+| `orders-completed-topic`              | 1           | order-service        | —                                   | Orden completada                                 |
+| `orders-backup-topic`                 | 1           | order-service        | —                                   | Respaldo de órdenes                              |
+| `inventory-reserved-topic`            | 1           | inventory-service    | notification-service                | Stock reservado correctamente                    |
+| `inventory-reservation-failed-topic`  | 1           | inventory-service    | order-service                       | Reserva de stock fallida                         |
 | `notifications-confirmed-orders-topic`| —           | notification-service | —                                   | Confirmación de notificación enviada             |
-| `orders-log-error-topic`              | 3           | order-service        | —                                   | Registro de errores de order-service             |
+| `orders-log-error-topic`              | 1           | order-service        | —                                   | Registro de errores de order-service             |
 | `inventory-log-error-topic`           | 3           | inventory-service    | —                                   | Registro de errores de inventory-service         |
-| `notifications-log-error-topic`       | 3           | notification-service | —                                   | Registro de errores de notification-service      |
+| `notifications-log-error-topic`       | 1           | notification-service | —                                   | Registro de errores de notification-service      |
 
 ### Estrategia de reintentos en `inventory-service`
 
@@ -261,7 +261,6 @@ GET /api/orders/{id}
 6. Tras agotar reintentos → orders-created-topic-dlt
 7. @DltHandler reenvía hasta 3 veces con header nroRetry
 8. Tras 3 intentos en DLT → persiste evento en outbox + publica FailedInventoryEvent → inventory-reservation-failed-topic
-9. order-service consume inventory-reservation-failed-topic → actualiza orden a status=FAILED/CANCELLED
 ```
 
 ### Caso 3: Error transitorio (NullPointerException)
@@ -293,10 +292,9 @@ Servicios disponibles tras ejecutar docker compose:
 | Kafka UI         | `http://localhost:8088`  |
 | MySQL (orders)   | `localhost:3306`         |
 | MySQL (inventory)| `localhost:3307`         |
-| PostgreSQL       | `localhost:5432`         |
 | MongoDB          | `localhost:27017`        |
-
-> **RabbitMQ** no está incluido en el docker-compose. Debe estar corriendo localmente en `localhost:5672` (usuario/contraseña: `guest/guest`). Instalación: https://www.rabbitmq.com/docs/download
+| RabbitMQ         | `localhost:5672`         |
+| RabbitMQ UI      | `http://localhost:15672` |
 
 ### 2. Compilar todos los módulos
 
@@ -341,23 +339,6 @@ Monitorear los eventos en **Kafka UI** → `http://localhost:8088`.
 
 ---
 
-## Tests
-
-```bash
-# Todos los tests
-./mvnw test
-
-# Tests de un servicio específico
-cd order-service && ./mvnw test
-
-# Clase de test específica
-cd order-service && ./mvnw test -Dtest=CreateOrderUseCaseImplTest
-```
-
-Los tests unitarios usan **JUnit 5 + Mockito + AssertJ**. Se usa `@EmbeddedKafka` solo cuando la integración con Kafka es estrictamente necesaria.
-
----
-
 ## Estructura del proyecto
 
 ```
@@ -375,22 +356,27 @@ microservices/
 │               ├── messaging/         # InventoryServiceMessagingAdapter, OrderListener
 │               └── persistence/       # OrderPersistenceAdapter (JPA/MySQL)
 ├── inventory-service/
-│   └── src/main/java/.../
-│       ├── domain/                    # Inventory, InventoryReservation, ReservationStatus, eventos
-│       ├── application/               # InventoryMessagingPort, InventoryService
-│       └── infrastructure/
-│           ├── adapter/in/messaging/  # InventoryKafkaAdapter (@RetryableTopic, @DltHandler)
-│           │                          # InventoryServiceListenerImpl (RabbitMQ)
-│           └── adapter/out/
-│               ├── messaging/         # NotificationServiceMessagingAdapter, OrderServiceMessagingAdapter
-│               └── persistence/       # InventoryPersistenceAdapter + OutboxEvent (JPA/MySQL)
+│   └── src/main/
+│       ├── java/.../
+│       │   ├── domain/                    # Inventory, InventoryReservation, ReservationStatus, eventos
+│       │   ├── application/               # InventoryMessagingPort, InventoryService
+│       │   └── infrastructure/
+│       │       ├── adapter/in/messaging/  # InventoryKafkaAdapter (@RetryableTopic, @DltHandler)
+│       │       │                          # InventoryServiceListenerImpl (RabbitMQ)
+│       │       └── adapter/out/
+│       │           ├── messaging/         # NotificationServiceMessagingAdapter, OrderServiceMessagingAdapter
+│       │           └── persistence/       # InventoryPersistenceAdapter + OutboxEvent (JPA/MySQL)
+│       └── resources/db/migration/        # V1__create_inventory_table.sql, V2__add_initial_inventory.sql (Flyway)
 ├── notification-service/
 │   └── src/main/java/.../
 │       ├── domain/                    # Notification, OutBoxEvent, NotificationStatus
 │       ├── application/               # NotificationService, NotificationServicePort
 │       └── infrastructure/
-│           ├── config/                # KafkaConfig, RabbitMQConfig
-│           ├── adapter/in/messaging/  # NotificationKafkaAdapter (consume inventory-reserved-topic)
+│           ├── config/                # KafkaConfig (tipado con ReservedInventoryEvent), RabbitMQConfig
+│           ├── adapter/in/messaging/  # NotificationKafkaAdapter (consume inventory-reserved-topic,
+│           │                          #   @RetryableTopic con BussinessException, validación completa del evento,
+│           │                          #   @DltHandler con lógica de reintento mejorada)
+│           │                          # exception/BussinessException
 │           └── out/
 │               ├── messaging/         # NotificationSenderListener (RabbitMQ), NotificationMessageServiceImpl
 │               └── persistence/       # NotificationMongoRepository (MongoDB)

@@ -51,14 +51,25 @@ public class KafkaConfig {
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
-    /**
-     * Proporciona un KafkaTemplate para enviar mensajes String al clúster de Kafka de forma sencilla.
-     *
-     * @return KafkaTemplate para mensajes String.
-     */
     @Bean
-    public KafkaTemplate<String, String> kafkaTemplate() {
-        return new KafkaTemplate<>(producerFactory());
+    public ProducerFactory<String, ReservedInventoryEvent> reservedInventoryProducerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                org.springframework.kafka.support.serializer.JsonSerializer.class);
+
+        configProps.put(ProducerConfig.ACKS_CONFIG, "all");
+        configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        configProps.put(ProducerConfig.RETRIES_CONFIG, 3);
+        configProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "1");
+
+        return new DefaultKafkaProducerFactory<>(configProps);
+    }
+
+    @Bean(name = "reservedInventoryKafkaTemplate")
+    public KafkaTemplate<String, ReservedInventoryEvent> reservedInventoryKafkaTemplate() {
+        return new KafkaTemplate<>(reservedInventoryProducerFactory());
     }
 
     /**
@@ -75,7 +86,7 @@ public class KafkaConfig {
         configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
         configProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         configProps.put(JsonDeserializer.TRUSTED_PACKAGES, "*");
-        configProps.put(JsonDeserializer.VALUE_DEFAULT_TYPE, ReservedInventoryEvent.class.getName());
+        configProps.put(JsonDeserializer.VALUE_DEFAULT_TYPE, "com.cballestas.inventory_service.domain.model.event.ReservedInventoryEvent");
         configProps.put(JsonDeserializer.USE_TYPE_INFO_HEADERS, false);
         return new DefaultKafkaConsumerFactory<>(configProps);
     }
@@ -103,7 +114,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic confirmedOrderTopic() {
         return TopicBuilder.name(confirmedOrdersTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }
@@ -116,7 +127,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic notificationLogErrorTopic() {
         return TopicBuilder.name(notificationErrorsTopic)
-                .partitions(3)
+                .partitions(1)
                 .replicas(1)
                 .build();
     }
