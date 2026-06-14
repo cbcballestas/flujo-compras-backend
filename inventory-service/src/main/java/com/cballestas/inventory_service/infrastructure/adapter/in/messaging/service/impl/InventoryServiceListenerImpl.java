@@ -15,7 +15,7 @@ public class InventoryServiceListenerImpl implements InventoryListenerService {
 
     private final RabbitTemplate rabbitTemplate;
 
-    private static final String OUTBOX_KEY = "route.inventory.parking-lot.";
+    private static final String PARKING_LOT_KEY = "route.inventory.parking-lot.";
     private static final String RESERVED_ORDER_KEY = "route.inventory.orders-reserved";
 
     /**
@@ -28,8 +28,8 @@ public class InventoryServiceListenerImpl implements InventoryListenerService {
      * @param event el evento {@link OutBoxEvent} que será enviado a la cola de estacionamiento
      */
     @Override
-    public void saveBackupOutboxEvent(OutBoxEvent event) {
-        rabbitTemplate.convertAndSend(OUTBOX_KEY.concat(event.getKey()), event,
+    public void handleBackupOutboxEvent(OutBoxEvent event) {
+        rabbitTemplate.convertAndSend(PARKING_LOT_KEY.concat(event.getKey()), event,
                 message -> {
                     message.getMessageProperties()
                             .setDeliveryMode(MessageDeliveryMode.PERSISTENT);

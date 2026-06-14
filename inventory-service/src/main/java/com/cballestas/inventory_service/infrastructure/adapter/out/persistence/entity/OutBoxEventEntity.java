@@ -3,6 +3,8 @@ package com.cballestas.inventory_service.infrastructure.adapter.out.persistence.
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -23,11 +25,14 @@ public class OutBoxEventEntity {
     @Column(name = "event_key")
     private String key;
 
-    @Column(name = "payload")
+    @Column(name = "payload", columnDefinition = "LONGTEXT")
     private String payload;
 
     @Column(name = "topic")
     private String topic;
+
+    @Column(name = "error_message")
+    private String errorMessage;
 
     @Column(name = "published")
     private Boolean published;

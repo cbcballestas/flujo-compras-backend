@@ -1,29 +1,25 @@
 package com.cballestas.inventory_service.infrastructure.adapter.in.messaging;
 
 import com.cballestas.inventory_service.application.port.in.InventoryMessagingPort;
+import com.cballestas.inventory_service.domain.exception.InsufficientStockException;
+import com.cballestas.inventory_service.domain.exception.ProductNotFoundException;
 import com.cballestas.order_service.domain.model.dto.event.OrderCreatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.annotation.DltHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.annotation.RetryableTopic;
-import org.springframework.kafka.core.KafkaProducerException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.retrytopic.TopicSuffixingStrategy;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
-import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.handler.annotation.Header;
-import org.springframework.messaging.support.GenericMessage;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-
-import java.util.Map;
 
 @Slf4j
 @Component
@@ -31,7 +27,8 @@ import java.util.Map;
 public class InventoryKafkaAdapter {
 
     public static final String RETRY_HEADER = "nroRetry";
-    public static final int MAX_RETRY_ATTEMPTS = 2;
+    public static final int MAX_RETRY_ATTEMPTS = 3;
+
     private final InventoryMessagingPort inventoryMessagingPort;
 
     @Qualifier("orderCreatedEventTemplate")
@@ -50,10 +47,10 @@ public class InventoryKafkaAdapter {
             kafkaTemplate = "orderCreatedEventTemplate",
             listenerContainerFactory = "orderCreatedListenerContainerFactory",
             include = {
-                    KafkaException.class,
-                    KafkaProducerException.class
+                    ProductNotFoundException.class,
+                    InsufficientStockException.class
             },
-            backoff = @Backoff(delay = 3000, multiplier = MAX_RETRY_ATTEMPTS),
+            backoff = @Backoff(delay = 3000, multiplier = 2),
             topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE,
             retryTopicSuffix = "-try", dltTopicSuffix = "-dlt")
     @KafkaListener(topics = {"${app.kafka.topics.orders-created}"},
@@ -77,12 +74,13 @@ public class InventoryKafkaAdapter {
     public void handleDltOrderCreatedEvent(
             OrderCreatedEvent orderCreatedEvent,
             @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
+            @Header(name = KafkaHeaders.EXCEPTION_MESSAGE, required = false) String exceptionMessage,
             @Header(value = RETRY_HEADER, required = false) String nroRetry) {
         log.info("Retries attempts: {}", nroRetry);
         int iNroRetry = ((nroRetry == null) ? 0 : Integer.parseInt(nroRetry));
         log.info("Message dlt topic={}, payload={}", topic, orderCreatedEvent);
 
-        if (iNroRetry <= MAX_RETRY_ATTEMPTS) {
+        if (iNroRetry < MAX_RETRY_ATTEMPTS) {
 
             int nextAttempt = iNroRetry + 1;
 
@@ -90,7 +88,8 @@ public class InventoryKafkaAdapter {
                     .withPayload(orderCreatedEvent)
                     .setHeader(KafkaHeaders.TOPIC, topic)
                     .setHeader(KafkaHeaders.KEY, StringUtils.hasText(orderCreatedEvent.orderId()) ? orderCreatedEvent.orderId() : "unknown-key")
-                    .setHeader(RETRY_HEADER, nextAttempt)
+                    .setHeader(RETRY_HEADER, String.valueOf(nextAttempt))
+                    .setHeader(KafkaHeaders.EXCEPTION_MESSAGE, exceptionMessage)
                     .setHeader("contentType", "application/json") // Útil para tu configuración de DLT
                     .build();
             kafkaTemplate.send(message)
@@ -105,8 +104,21 @@ public class InventoryKafkaAdapter {
                     });
         } else {
             // Database Persiste(NO_SQL - MongoDb/ Casandra) or File Serve
-            log.info("Persist event to database: {}", orderCreatedEvent);
-            inventoryMessagingPort.saveOutboxEvent(orderCreatedTopic, orderCreatedEvent);
+            log.error("❌ Max retry attempts reached for order: {}. Saving to outbox with error message: {}",
+                    orderCreatedEvent.orderId(), exceptionMessage);
+
+            OrderCreatedEvent outboxEvent = OrderCreatedEvent.builder()
+                    .orderId(orderCreatedEvent.orderId())
+                    .customerId(orderCreatedEvent.customerId())
+                    .items(orderCreatedEvent.items())
+                    .totalAmount(orderCreatedEvent.totalAmount())
+                    .status(orderCreatedEvent.status())
+                    .createdAt(orderCreatedEvent.createdAt())
+                    .retryCount(iNroRetry)
+                    .errorMessage(exceptionMessage)
+                    .build();
+
+            inventoryMessagingPort.saveOutboxEvent(orderCreatedTopic, outboxEvent, exceptionMessage);
         }
     }
 }

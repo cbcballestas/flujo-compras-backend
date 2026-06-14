@@ -20,6 +20,7 @@ public class OutBoxEvent {
     private String key;
     private String payload;
     private String topic;
+    private String errorMessage;
     private Boolean published;
     private LocalDateTime createdAt;
 }

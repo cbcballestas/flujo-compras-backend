@@ -5,6 +5,8 @@ import com.cballestas.inventory_service.application.port.out.InventoryPersistenc
 import com.cballestas.inventory_service.application.port.out.InventoryReservationPersistencePort;
 import com.cballestas.inventory_service.application.port.out.OutboxEventPersistencePort;
 import com.cballestas.inventory_service.domain.enums.ReservationStatus;
+import com.cballestas.inventory_service.domain.exception.InsufficientStockException;
+import com.cballestas.inventory_service.domain.exception.ProductNotFoundException;
 import com.cballestas.inventory_service.domain.model.Inventory;
 import com.cballestas.inventory_service.domain.model.InventoryReservation;
 import com.cballestas.inventory_service.domain.model.event.FailedInventoryEvent;
@@ -20,7 +22,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -68,20 +69,22 @@ public class InventoryService implements InventoryMessagingPort {
      * Persiste un evento en la tabla outbox para garantizar la consistencia eventual entre servicios.
      * Serializa el evento de orden creada y lo almacena junto con el nombre del tópico.
      *
-     * @param topic nombre del tópico Kafka al que se enviará el evento
+     * @param topic             nombre del tópico Kafka al que se enviará el evento
      * @param orderCreatedEvent evento que contiene los datos de la orden creada
+     * @param errorMessage      mensaje descriptivo del motivo del fallo, si aplica (puede ser nulo o vacío si no hay error)
      */
     @Transactional
     @Override
-    public void saveOutboxEvent(String topic, OrderCreatedEvent orderCreatedEvent) {
+    public void saveOutboxEvent(String topic, OrderCreatedEvent orderCreatedEvent, String errorMessage) {
         try {
             var outboxEvent = OutBoxEvent.builder()
                     .key(orderCreatedEvent.orderId())
                     .topic(topic)
                     .payload(objectMapper.writeValueAsString(orderCreatedEvent))
+                    .errorMessage(errorMessage)
                     .published(Boolean.FALSE)
                     .build();
-            log.info("Saving outbox event for order: {}", orderCreatedEvent.orderId());
+            log.info("Saving outbox event to database, for order: {}", orderCreatedEvent.orderId());
             outboxEventPersistencePort.save(outboxEvent);
 
             log.info("Saving backup outbox event for order: {}", orderCreatedEvent.orderId());
@@ -102,13 +105,13 @@ public class InventoryService implements InventoryMessagingPort {
             Optional<Inventory> byProductIdOpt = inventoryPersistencePort.findByProductId(item.productId());
             if (byProductIdOpt.isEmpty()) {
                 log.warn("Product {} does not exist in inventory", item.productId());
-                return false;
+                throw new ProductNotFoundException("Product " + item.productId() + " does not exist in inventory");
             }
             Inventory inventory = byProductIdOpt.get();
             if (!inventory.canReserve(item.quantity())) {
-                log.warn("Insufficient inventory for product {}: available={}, requested={}",
+                log.warn("Insufficient stock for product {}: available={}, requested={}",
                         item.productId(), inventory.getAvailable(), item.quantity());
-                return false;
+                throw new InsufficientStockException("Insufficient inventory for product " + item.productId());
             }
         }
         return true;

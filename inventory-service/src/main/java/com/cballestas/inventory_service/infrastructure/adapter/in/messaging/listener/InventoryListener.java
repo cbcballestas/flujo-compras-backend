@@ -1,7 +1,6 @@
 package com.cballestas.inventory_service.infrastructure.adapter.in.messaging.listener;
 
 import com.cballestas.inventory_service.domain.model.event.OutBoxEvent;
-import com.cballestas.inventory_service.domain.model.event.ReservedInventoryEvent;
 import com.cballestas.inventory_service.infrastructure.adapter.in.messaging.service.InventoryListenerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +26,7 @@ public class InventoryListener {
      */
     @EventListener
     public void handleParkingLotEvent(OutBoxEvent event) {
-        inventoryListenerService.saveBackupOutboxEvent(event);
+        inventoryListenerService.handleBackupOutboxEvent(event);
     }
 
     /**
