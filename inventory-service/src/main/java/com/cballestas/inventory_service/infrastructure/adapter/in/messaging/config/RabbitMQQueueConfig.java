@@ -17,22 +17,29 @@ public class RabbitMQQueueConfig {
      * * : Solo remplaza solo a una palabra
      */
 
-    public static final String ROUTING_RESERVED_ORDERS_KEY = "route.inventory.orders.reserved.#";
-    public static final String ROUTING_PARKING_LOT_KEY = "route.inventory.*.parking-lot";
+    public static final String ROUTING_RESERVED_ORDERS_KEY = "route.inventory.orders-reserved.#";
+    public static final String ROUTING_PARKING_LOT_KEY = "route.inventory.parking-lot.*";
 
     @Bean
     TopicExchange appExchange() {
-        return new TopicExchange(EXCHANGE_NAME,  true, false);
+        return ExchangeBuilder
+                .topicExchange(EXCHANGE_NAME)
+                .durable(true)
+                .build();
     }
 
     @Bean
     Queue appQueueInventoryProcessed() {
-        return new Queue(INVENTORY_RESERVED_ORDERS_QUEUE_NAME, true);
+        return QueueBuilder
+                .durable(INVENTORY_RESERVED_ORDERS_QUEUE_NAME)
+                .build();
     }
 
     @Bean
     Queue appQueueInventoryParkingLot() {
-        return new Queue(INVENTORY_PARKING_LOT_QUEUE_NAME, true);
+        return QueueBuilder
+                .durable(INVENTORY_PARKING_LOT_QUEUE_NAME)
+                .build();
     }
 
     @Bean

@@ -31,7 +31,7 @@ infrastructure/  → Adaptadores: REST (in), Kafka consumers/producers (in/out),
 |------------------------|--------|----------------------|------------------------------------------------------------------|
 | `order-service`        | 8080   | MySQL (3306)         | Punto de entrada REST; crea órdenes y publica eventos en Kafka   |
 | `inventory-service`    | 8081   | MySQL (3307)         | Consume eventos de órdenes; reserva stock; publica éxito o fallo |
-| `notification-service` | 8082   | MongoDB (27017)      | Consume eventos de inventario; envía notificaciones por email    |
+| `notification-service` | 8082   | MongoDB (27018)      | Consume eventos de inventario; envía notificaciones por email    |
 | `payment-service`      | —      | PostgreSQL (5432)    | **No implementado** — base de datos provisionada en docker-compose |
 
 ### Diagrama de flujo
@@ -292,7 +292,7 @@ Servicios disponibles tras ejecutar docker compose:
 | Kafka UI         | `http://localhost:8088`  |
 | MySQL (orders)   | `localhost:3306`         |
 | MySQL (inventory)| `localhost:3307`         |
-| MongoDB          | `localhost:27017`        |
+| MongoDB          | `localhost:27018`        |
 | RabbitMQ         | `localhost:5672`         |
 | RabbitMQ UI      | `http://localhost:15672` |
 

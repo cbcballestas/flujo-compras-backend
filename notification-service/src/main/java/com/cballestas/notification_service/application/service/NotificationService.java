@@ -46,7 +46,7 @@ public class NotificationService implements NotificationServicePort {
 
         notificationPersistencePort.save(notification);
 
-        // Enviar notificaciones por email y sms
+        // Enviar notificaciones por email y sms ( Fanout)
         rabbitTemplate.convertAndSend(RabbitMQConstant.NOTIFICATION_EXCHANGE_NAME, "", event);
 
         applicationEventPublisher.publishEvent(new UpdateNotificationStatusEvent(event.orderId(), event.reservationId(), event.customerId(), NotificationStatus.SENT));

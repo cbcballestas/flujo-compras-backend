@@ -30,6 +30,7 @@ app:
     topics:
       notification-confirmed: notifications-confirmed-orders-topic
       inventory-reserved: inventory-reserved-topic
+      inventory-reservation-failed: inventory-reservation-failed-topic
       log-error: notifications-log-error-topic
   mail:
     subject: "Order Reservation Confirmation"

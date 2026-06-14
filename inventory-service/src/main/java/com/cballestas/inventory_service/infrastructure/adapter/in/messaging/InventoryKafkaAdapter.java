@@ -14,11 +14,14 @@ import org.springframework.kafka.core.KafkaProducerException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.retrytopic.TopicSuffixingStrategy;
 import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.support.GenericMessage;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.Map;
 
@@ -27,6 +30,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class InventoryKafkaAdapter {
 
+    public static final String RETRY_HEADER = "nroRetry";
+    public static final int MAX_RETRY_ATTEMPTS = 2;
     private final InventoryMessagingPort inventoryMessagingPort;
 
     @Qualifier("orderCreatedEventTemplate")
@@ -48,7 +53,7 @@ public class InventoryKafkaAdapter {
                     KafkaException.class,
                     KafkaProducerException.class
             },
-            backoff = @Backoff(delay = 3000, multiplier = 2),
+            backoff = @Backoff(delay = 3000, multiplier = MAX_RETRY_ATTEMPTS),
             topicSuffixingStrategy = TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE,
             retryTopicSuffix = "-try", dltTopicSuffix = "-dlt")
     @KafkaListener(topics = {"${app.kafka.topics.orders-created}"},
@@ -72,18 +77,32 @@ public class InventoryKafkaAdapter {
     public void handleDltOrderCreatedEvent(
             OrderCreatedEvent orderCreatedEvent,
             @Header(KafkaHeaders.RECEIVED_TOPIC) String topic,
-            @Header(value = "nroRetry", required = false) String nroRetry) {
+            @Header(value = RETRY_HEADER, required = false) String nroRetry) {
         log.info("Retries attempts: {}", nroRetry);
         int iNroRetry = ((nroRetry == null) ? 0 : Integer.parseInt(nroRetry));
         log.info("Message dlt topic={}, payload={}", topic, orderCreatedEvent);
 
-        if (iNroRetry < 3) {
-            Map<String, Object> headers = Map.of(
-                    KafkaHeaders.TOPIC, orderCreatedTopic,
-                    KafkaHeaders.KEY, orderCreatedEvent.orderId(),
-                    "nroRetry", (iNroRetry + 1),
-                    "contentType", "application/json");
-            kafkaTemplate.send(new GenericMessage<>(orderCreatedEvent, new MessageHeaders(headers)));
+        if (iNroRetry <= MAX_RETRY_ATTEMPTS) {
+
+            int nextAttempt = iNroRetry + 1;
+
+            Message<OrderCreatedEvent> message = MessageBuilder
+                    .withPayload(orderCreatedEvent)
+                    .setHeader(KafkaHeaders.TOPIC, topic)
+                    .setHeader(KafkaHeaders.KEY, StringUtils.hasText(orderCreatedEvent.orderId()) ? orderCreatedEvent.orderId() : "unknown-key")
+                    .setHeader(RETRY_HEADER, nextAttempt)
+                    .setHeader("contentType", "application/json") // Útil para tu configuración de DLT
+                    .build();
+            kafkaTemplate.send(message)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            log.error("❌ Error enviando mensaje a Kafka en reintento #{}: {}",
+                                    nextAttempt, ex.getMessage(), ex);
+                        } else {
+                            log.info("✅ Mensaje reenviado exitosamente. Intento #{} de {}",
+                                    nextAttempt, MAX_RETRY_ATTEMPTS);
+                        }
+                    });
         } else {
             // Database Persiste(NO_SQL - MongoDb/ Casandra) or File Serve
             log.info("Persist event to database: {}", orderCreatedEvent);

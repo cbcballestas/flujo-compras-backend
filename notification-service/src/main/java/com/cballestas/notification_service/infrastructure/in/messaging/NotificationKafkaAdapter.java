@@ -4,7 +4,6 @@ import com.cballestas.inventory_service.domain.model.event.ReservedInventoryEven
 import com.cballestas.notification_service.application.ports.in.NotificationServicePort;
 import com.cballestas.notification_service.infrastructure.in.messaging.exception.BussinessException;
 import com.cballestas.notification_service.infrastructure.out.messaging.dto.FailedNotificationEvent;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.mail.MessagingException;
 import lombok.RequiredArgsConstructor;
@@ -22,13 +21,10 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Headers;
-import org.springframework.messaging.support.GenericMessage;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
-
-import java.util.Map;
 
 @Slf4j
 @Component
@@ -42,7 +38,7 @@ public class NotificationKafkaAdapter {
     private final ObjectMapper objectMapper;
 
     // Constantes para validación de reintentos
-    private static final int MAX_RETRY_ATTEMPTS = 2;
+    private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final String RETRY_HEADER = "nroRetry";
 
     @Value("${app.kafka.topics.inventory-reserved}")
@@ -58,6 +54,7 @@ public class NotificationKafkaAdapter {
      * @throws MessagingException si ocurre un error al procesar el mensaje
      */
     @RetryableTopic(
+            kafkaTemplate = "reservedInventoryKafkaTemplate",
             listenerContainerFactory = "reservedInventoryListenerContainerFactory",
             include = {
                     MessagingException.class,
@@ -186,8 +183,8 @@ public class NotificationKafkaAdapter {
     /**
      * Valida que una cantidad sea un número positivo.
      *
-     * @param quantity    la cantidad a validar
-     * @param itemPrefix  prefijo descriptivo del contexto (para mensajes de error)
+     * @param quantity   la cantidad a validar
+     * @param itemPrefix prefijo descriptivo del contexto (para mensajes de error)
      * @throws BussinessException si la cantidad es nula, cero o negativa
      */
     private void validatePositiveQuantity(Integer quantity, String itemPrefix) {
@@ -203,8 +200,8 @@ public class NotificationKafkaAdapter {
     /**
      * Valida que un precio sea un número no negativo.
      *
-     * @param price       el precio a validar
-     * @param itemPrefix  prefijo descriptivo del contexto (para mensajes de error)
+     * @param price      el precio a validar
+     * @param itemPrefix prefijo descriptivo del contexto (para mensajes de error)
      * @throws BussinessException si el precio es nulo o negativo
      */
     private void validateNonNegativePrice(Double price, String itemPrefix) {
@@ -224,10 +221,10 @@ public class NotificationKafkaAdapter {
      * registro y auditoría.
      *
      * @param reservedInventoryEvent evento de inventario reservado que falló en todos los reintentos
-     * @param topic                 nombre del tópico DLT donde se recibió el mensaje
-     * @param exceptionMessage      mensaje de excepción que causó el último fallo
-     * @param headers               encabezados del mensaje Kafka con metadatos adicionales
-     * @param nroRetry             contador de reintentos (puede ser nulo en el primer intento de DLT)
+     * @param topic                  nombre del tópico DLT donde se recibió el mensaje
+     * @param exceptionMessage       mensaje de excepción que causó el último fallo
+     * @param headers                encabezados del mensaje Kafka con metadatos adicionales
+     * @param nroRetry               contador de reintentos (puede ser nulo en el primer intento de DLT)
      */
     @DltHandler
     public void handleDltReservedInventoryEvent(
@@ -240,43 +237,42 @@ public class NotificationKafkaAdapter {
         // ✅ Validar y parsear número de reintentos
         int currentRetryAttempt = validateAndParseRetryAttempt(nroRetry);
 
-        log.info("🔄 DLT Handler activado - Topic: {}, Retries attempts: {}/{}",
-                topic, currentRetryAttempt, MAX_RETRY_ATTEMPTS);
-        log.error("❌ Message en DLT - orderId={}, exceptionMessage={}",
-                reservedInventoryEvent.orderId(), exceptionMessage);
-
         // ✅ Validar si aún hay reintentos disponibles
         if (canRetry(currentRetryAttempt)) {
+            log.info("🔄 DLT Handler activado - Topic: {}, Retries attempts: {}/{}",
+                    topic, currentRetryAttempt, MAX_RETRY_ATTEMPTS);
+            log.error("❌ Message en DLT - orderId={}, exceptionMessage={}",
+                    reservedInventoryEvent.orderId(), exceptionMessage);
             performRetry(reservedInventoryEvent, currentRetryAttempt, topic, exceptionMessage);
         } else {
             // ✅ Se agotaron reintentos: publicar evento de fallo
-            publishFailureEvent(reservedInventoryEvent, currentRetryAttempt);
+            publishFailureEvent(reservedInventoryEvent, currentRetryAttempt, exceptionMessage);
         }
     }
 
     /**
      * Valida y parsea el número de reintentos desde el encabezado del mensaje Kafka.
-     * Retorna 0 si el encabezado es nulo o inválido.
+     * Retorna 1 si el encabezado es nulo o inválido.
      *
      * @param nroRetry valor del encabezado de reintentos (puede ser nulo o vacío)
-     * @return número entero de intentos realizados, 0 si el valor es inválido
+     * @return número entero de intentos realizados, 1 si el valor es inválido
      */
     private int validateAndParseRetryAttempt(String nroRetry) {
         if (nroRetry == null || nroRetry.trim().isEmpty()) {
             log.debug("Primer reintento: nroRetry es nulo");
-            return 0;
+            return 1;
         }
 
         try {
             int attempt = Integer.parseInt(nroRetry);
             if (attempt < 0) {
-                log.warn("⚠️ nroRetry negativo detectado: {}. Usando 0.", attempt);
-                return 0;
+                log.warn("⚠️ nroRetry negativo detectado: {}. Usando 1.", attempt);
+                return 1;
             }
             return attempt;
         } catch (NumberFormatException e) {
-            log.error("⚠️ nroRetry inválido (no es número): '{}'. Usando 0.", nroRetry);
-            return 0;
+            log.error("⚠️ nroRetry inválido (no es número): '{}'. Usando 1.", nroRetry);
+            return 1;
         }
     }
 
@@ -288,10 +284,9 @@ public class NotificationKafkaAdapter {
      * @return {@code true} si se pueden hacer más reintentos, {@code false} si se agotó el límite
      */
     private boolean canRetry(int currentRetryAttempt) {
-        int realCurrentAttempt = currentRetryAttempt + 1;
-        boolean canRetry = realCurrentAttempt < MAX_RETRY_ATTEMPTS;
-        log.debug("Validación de reintentos: intento actual={}, máximo={}, ¿puede reintentar?={}",
-                realCurrentAttempt, MAX_RETRY_ATTEMPTS, canRetry);
+        boolean canRetry = currentRetryAttempt < MAX_RETRY_ATTEMPTS;
+        log.info("Validación de reintentos: intento actual={}, máximo={}, ¿puede reintentar?={}",
+                currentRetryAttempt, MAX_RETRY_ATTEMPTS, canRetry);
         return canRetry;
     }
 
@@ -299,10 +294,10 @@ public class NotificationKafkaAdapter {
      * Realiza el reintento enviando el evento al tópico original,
      * incrementando el contador de reintentos en el encabezado del mensaje.
      *
-     * @param event             evento a reintentar
-     * @param currentAttempt    número actual de intentos realizados
-     * @param topic             nombre del tópico al que se reenviará el mensaje
-     * @param exceptionMessage  mensaje de excepción que causó el fallo anterior
+     * @param event            evento a reintentar
+     * @param currentAttempt   número actual de intentos realizados
+     * @param topic            nombre del tópico al que se reenviará el mensaje
+     * @param exceptionMessage mensaje de excepción que causó el fallo anterior
      */
     private void performRetry(ReservedInventoryEvent event, int currentAttempt, String topic, String exceptionMessage) {
         int nextAttempt = currentAttempt + 1;
@@ -315,6 +310,7 @@ public class NotificationKafkaAdapter {
                     .withPayload(event)
                     .setHeader(KafkaHeaders.TOPIC, topic)
                     .setHeader(RETRY_HEADER, nextAttempt)
+                    .setHeader(KafkaHeaders.KEY, StringUtils.hasText(event.orderId()) ? event.orderId() : "unknown-key")
                     .setHeader(KafkaHeaders.EXCEPTION_MESSAGE, exceptionMessage)
                     .setHeader("contentType", "application/json") // Útil para tu configuración de DLT
                     .build();
@@ -331,7 +327,7 @@ public class NotificationKafkaAdapter {
                     });
         } catch (Exception e) {
             log.error("❌ Excepción crítica en performRetry: {}", e.getMessage(), e);
-            publishFailureEvent(event, nextAttempt);
+            publishFailureEvent(event, nextAttempt, exceptionMessage);
         }
     }
 
@@ -340,13 +336,14 @@ public class NotificationKafkaAdapter {
      * o cuando falla el envío durante el reintento. Este evento se publica en el contexto
      * de aplicación para ser procesado por otros listeners del servicio.
      *
-     * @param event         evento de inventario reservado que falló finalmente
-     * @param attemptCount  número total de intentos realizados
+     * @param event        evento de inventario reservado que falló finalmente
+     * @param attemptCount número total de intentos realizados
+     * @param errorMessage mensaje de error que causó el fallo (opcional, puede ser nulo)
      */
-    private void publishFailureEvent(ReservedInventoryEvent event, int attemptCount) {
+    private void publishFailureEvent(ReservedInventoryEvent event, int attemptCount, String errorMessage) {
         log.error("🛑 Descartando mensaje después de {} reintentos. orderId={}", attemptCount, event.orderId());
         try {
-            FailedNotificationEvent failureEvent = new FailedNotificationEvent(event);
+            FailedNotificationEvent failureEvent = new FailedNotificationEvent(event, errorMessage);
             applicationEventPublisher.publishEvent(failureEvent);
             log.info("✅ FailedNotificationEvent publicado para orderId={}", event.orderId());
         } catch (Exception e) {

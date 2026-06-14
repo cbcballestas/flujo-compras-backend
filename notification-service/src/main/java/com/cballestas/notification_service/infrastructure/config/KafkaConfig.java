@@ -67,6 +67,44 @@ public class KafkaConfig {
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
+    @Bean
+    public KafkaTemplate<String, String> kafkaTemplate() {
+        return new KafkaTemplate<>(producerFactory());
+    }
+
+    /**
+     * Crea y configura un {@link ConcurrentKafkaListenerContainerFactory} para la recepción concurrente de mensajes de Kafka.
+     * <p>
+     * Permite la gestión eficiente de múltiples hilos de consumidores utilizando el {@link ConsumerFactory} configurado.
+     *
+     * @return una instancia de {@link ConcurrentKafkaListenerContainerFactory} para consumidores de Kafka tipo String.
+     */
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        return factory;
+    }
+
+    /**
+     * Crea y configura un {@link ConsumerFactory} para la recepción y deserialización de mensajes desde Kafka.
+     * <p>
+     * Establece los parámetros de conexión, la deserialización de claves y valores como cadenas,
+     * el reinicio automático de offset y la desactivación del auto-commit.
+     *
+     * @return una instancia de {@link ConsumerFactory} configurada para consumidores de tipo String.
+     */
+    @Bean
+    public ConsumerFactory<String, String> consumerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        configProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        return new DefaultKafkaConsumerFactory<>(configProps);
+    }
+
     @Bean(name = "reservedInventoryKafkaTemplate")
     public KafkaTemplate<String, ReservedInventoryEvent> reservedInventoryKafkaTemplate() {
         return new KafkaTemplate<>(reservedInventoryProducerFactory());
