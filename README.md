@@ -1,4 +1,4 @@
-# Microservicios con Kafka — Patrón Saga
+# Microservicios con Kafka — Patrón Outbox
 
 Sistema de gestión de órdenes basado en microservicios que implementa el **Patrón Saga Coreografiado** usando Apache Kafka como bus de eventos.
 
