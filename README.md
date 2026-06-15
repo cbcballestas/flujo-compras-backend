@@ -361,11 +361,11 @@ cd notification-service && ./mvnw spring-boot:run
 curl -X POST http://localhost:8080/api/orders \
   -H "Content-Type: application/json" \
   -d '{
-    "customerId": "cust-001",
+    "customerId": "CUST-001",
     "items": [
       {
-        "productId": "prod-001",
-        "productName": "Laptop Dell XPS",
+        "productId": "PROD-001",
+        "productName": "Laptop Lenovo ThinkPad",
         "quantity": 1,
         "price": 1200.00
       }
