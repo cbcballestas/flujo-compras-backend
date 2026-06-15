@@ -196,9 +196,7 @@ Todos los productores comparten la misma configuración para garantizar exactame
 ### Estados de una orden (`OrderStatus`)
 
 ```
-CREATED → PENDING_INVENTORY → INVENTORY_RESERVED → PENDING_PAYMENT
-                                                 → PAYMENT_PROCESSED → CONFIRMED → COMPLETED
-        → CANCELLED / FAILED
+CREATED → INVENTORY_RESERVED → CONFIRMED
 ```
 
 ---
@@ -214,17 +212,17 @@ POST /api/orders
 Content-Type: application/json
 
 {
-  "customerId": "cust-001",
+  "customerId": "CUST-001",
   "items": [
     {
-      "productId": "prod-001",
-      "productName": "Laptop Dell XPS",
-      "quantity": 1,
-      "price": 1200.00
+      "productId": "PROD-001",
+      "productName": "Laptop Lenovo ThinkPad",
+      "quantity": 2,
+      "price": 1500.00
     },
     {
-      "productId": "prod-002",
-      "productName": "Mouse Logitech",
+      "productId": "PROD-002",
+      "productName": "Monitor Samsung 24\"",
       "quantity": 2,
       "price": 25.00
     }
