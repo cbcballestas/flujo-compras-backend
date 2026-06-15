@@ -1,103 +1,112 @@
 # CLAUDE.md
 
-Este archivo proporciona orientación a Claude Code (claude.ai/code) cuando trabaja con el código de este repositorio.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Comandos de Compilación y Ejecución
+## Commands
 
+### Infrastructure (must start first)
 ```bash
-# Compilar todos los módulos desde la raíz
-./mvnw clean install
-
-# Compilar un módulo específico
-cd order-service && ./mvnw clean install
-
-# Ejecutar un servicio específico
-cd order-service && ./mvnw spring-boot:run
-
-# Ejecutar todos los tests
-./mvnw test
-
-# Ejecutar tests de un módulo específico
-cd order-service && ./mvnw test
-
-# Ejecutar una clase de test específica
-cd order-service && ./mvnw test -Dtest=CreateOrderUseCaseImplTest
-
-# Iniciar la infraestructura (Kafka + bases de datos)
 docker compose up -d
-
-# Detener la infraestructura
-docker compose down
 ```
 
-## Arquitectura
+### Build all modules (run from repo root)
+```bash
+./mvnw clean install
+```
+> `order-service` must compile first — `inventory-service` and `notification-service` depend on its JAR for `OrderCreatedEvent`.
 
-Es un proyecto Maven multi-módulo (`groupId: com.cballestas`) con cuatro microservicios Spring Boot 3.x, cada uno siguiendo la **Arquitectura Hexagonal (Puertos y Adaptadores)**:
+### Run individual services
+```bash
+cd order-service && ./mvnw spring-boot:run        # port 8080
+cd inventory-service && ./mvnw spring-boot:run    # port 8081
+cd notification-service && ./mvnw spring-boot:run # port 8082
+```
+
+### Run tests for a single module
+```bash
+./mvnw test -pl order-service
+./mvnw test -pl inventory-service
+./mvnw test -pl notification-service
+```
+
+## Architecture
+
+**Choreographed Saga** over Apache Kafka. Three Spring Boot 3.5.14 / Java 21 services, each following **Hexagonal Architecture (Ports & Adapters)**:
 
 ```
-domain/          → Modelos de dominio puros, enums, eventos, excepciones (sin dependencias de framework)
-application/     → Interfaces de casos de uso (port/in) + interfaces de puertos de salida (port/out) + implementaciones de servicios
-infrastructure/  → Adaptadores: controladores REST (in), consumidores/productores Kafka (in/out), persistencia JPA/Mongo (out)
+domain/        → Pure models, enums, events, exceptions (no framework dependencies)
+application/   → Port interfaces (port/in, port/out) + service implementations
+infrastructure/→ Adapters: REST (in), Kafka/RabbitMQ consumers+producers (in/out), JPA/Mongo persistence (out)
 ```
 
-### Servicios y sus Roles
+### Services
 
-| Servicio | Puerto | BD | Rol |
+| Service | Port | DB | Role |
 |---|---|---|---|
-| `order-service` | 8080 | MySQL (3306) | Punto de entrada REST; crea órdenes y publica en Kafka |
-| `inventory-service` | — | MySQL (3307) | Consume eventos de órdenes; reserva stock; publica éxito/fallo |
-| `payment-service` | — | PostgreSQL (5432) | Stub; destinado a procesar pagos (aún no implementado) |
-| `notification-service` | — | MongoDB (27017) | Consume eventos; envía notificaciones por email vía Spring Mail |
+| `order-service` | 8080 | MySQL 3306 | REST entry point; creates orders, publishes `OrderCreatedEvent` |
+| `inventory-service` | 8081 | MySQL 3307 | Consumes orders; reserves stock; publishes success/failure events |
+| `notification-service` | 8082 | MongoDB 27018 | Consumes inventory events; sends Gmail SMTP email |
 
-### Flujo de Eventos Kafka (Patrón Saga)
+### Intra-service communication pattern
+
+Services do **not** call adapters directly. The application layer fires Spring `ApplicationEvent`s; infrastructure listeners translate those into Kafka/RabbitMQ sends:
 
 ```
-[Cliente]
-  → POST /orders
-    → order-service guarda la orden (CREATED)
-    → Spring ApplicationEvent → OrderListener
-      → publica OrderCreatedEvent al topic: orders-created
-
-[inventory-service]
-  ← consume orders-created (con @RetryableTopic: 2 intentos, backoff 3s/6s, sufijo DLT -dlt)
-  → reserva inventario
-  → Spring ApplicationEvent → NotificationServiceListener / OrderServiceListener
-    → publica ReservedInventoryEvent al topic: inventory-reserved
-    → publica FailedInventoryEvent al topic: inventory-failed
+UseCase → applicationEventPublisher.publishEvent(event)
+                ↓
+     @EventListener in infrastructure Listener
+                ↓
+     KafkaTemplate / RabbitTemplate → broker
 ```
 
-**Importante**: Dentro de cada servicio, la comunicación entre componentes usa `ApplicationEventPublisher` de Spring (no llamadas directas a métodos); luego el adaptador de salida traduce esos eventos en mensajes Kafka.
+### Cross-service dependency
 
-### Dependencia entre Módulos
+`inventory-service` imports `OrderCreatedEvent` directly from the `order-service` JAR (Maven dependency). Both services must be compiled for `inventory-service` to build.
 
-`inventory-service` depende directamente del JAR compilado de `order-service` para el DTO `OrderCreatedEvent`. El build de `order-service` usa `classifier=exec` para el fat JAR y también produce un `test-jar` para compartir fixtures de prueba.
+### Retry & DLT strategy (inventory-service)
 
-### Configuración de Topics Kafka
+`InventoryKafkaAdapter` uses `@RetryableTopic` with 2 retries (3 s / 6 s backoff). After exhausting retries, `@DltHandler` re-sends the message to the original topic up to 3 more times via a custom `nroRetry` header. On the 4th DLT arrival (nroRetry ≥ 3), the event is persisted to the outbox table and a `FailedInventoryEvent` is published.
 
-Los topics se definen como beans en `KafkaConfig`. Topics principales (configurados vía propiedades `app.kafka.topics.*`):
-- `orders-created` — 3 particiones
-- `orders-confirmed`, `orders-completed` — 3 particiones
-- `orders-cancelled` — 2 particiones
-- `inventory-reserved`, `inventory-failed` — 3 particiones
-- `log-error` — 3 particiones
+Retryable exceptions: `InsufficientStockException`, `ProductNotFoundException`, `NullPointerException`.
 
-Broker Kafka: `localhost:29092` (externo), `kafka:9092` (red Docker interna). Kafka UI disponible en `http://localhost:8088`.
+### Outbox pattern
 
-### Configuración de Productores Kafka
+`inventory-service` persists failed events in an `outbox_event` table (JPA/MySQL) and also publishes a backup via RabbitMQ. `notification-service` has a parallel `OutBoxEvent` in MongoDB.
 
-Los productores usan idempotencia (`enable.idempotence=true`), `acks=all`, `retries=3`, `max.in.flight.requests.per.connection=1`. Dos tipos de productor por servicio: `KafkaTemplate<String, String>` (serializado a JSON vía ObjectMapper) y `KafkaProducer<String, EventType>` tipado (Jackson JsonSerializer).
+### Database migrations
 
-## Convenciones Clave
+Only `inventory-service` uses **Flyway** (`src/main/resources/db/migration/`):
+- `V1__create_inventory_table.sql` — schema
+- `V2__add_initial_inventory.sql` — seed data (PROD-001, PROD-002, PROD-003)
 
-- **Lombok** se usa extensivamente: `@RequiredArgsConstructor`, `@Slf4j`, `@Builder`, `@Data`.
-- Los mappers de **MapStruct** gestionan las conversiones entre modelos de dominio y DTOs/entidades. El orden del procesador de anotaciones importa: mapstruct-processor → lombok → lombok-mapstruct-binding.
-- Los modelos de dominio son clases Java simples (sin anotaciones JPA); las entidades de persistencia son clases separadas en `infrastructure/adapter/out/persistence/entity/`.
-- `lombok.config` en la raíz configura el comportamiento de Lombok para todo el proyecto.
+`order-service` uses `ddl-auto: update` (no Flyway).
 
-## Guía de Testing
+## Key Kafka topics
 
-Los tests usan JUnit 5 + Mockito + AssertJ. Se prefieren tests unitarios puros con mocks sobre `@SpringBootTest`. Usar `@EmbeddedKafka` solo cuando la integración con Kafka sea estrictamente necesaria.
+| Topic | Producer | Consumer |
+|---|---|---|
+| `orders-created-topic` | order-service | inventory-service |
+| `inventory-reserved-topic` | inventory-service | notification-service |
+| `inventory-reservation-failed-topic` | inventory-service | order-service |
+| `orders-created-topic-dlt` | Spring Kafka | inventory-service `@DltHandler` |
 
-Convención de nombres: `debe[AccionEsperada]Cuando[Condicion]` con `@DisplayName` en español. Agrupar escenarios relacionados con `@Nested`. Cobertura objetivo: ≥90% por clase.
+All producers are configured with `enable.idempotence=true`, `acks=all`, `retries=3`, `max.in.flight.requests.per.connection=1`.
 
-El prompt `.github/prompts/add-unit-tests.prompt.md` puede usarse para generar tests automáticamente para un archivo.
+## Environment variables
+
+All services support overriding via env vars (defaults shown in `application.yaml`):
+
+| Variable | Default | Used by |
+|---|---|---|
+| `KAFKA_BOOTSTRAP_SERVER` | `localhost:29092` | all |
+| `DB_URL` | `jdbc:mysql://localhost:3306/orders_db` | order-service |
+| `DB_URL` | `jdbc:mysql://localhost:3307/inventory_db` | inventory-service |
+| `DB_USER` / `DB_PASSWORD` | `root` / `123456` | order/inventory |
+| `MONGO_HOST` / `MONGO_PORT` / `MONGO_DB` | `localhost` / `27018` / `notification_db` | notification-service |
+| `MAIL_USERNAME` / `MAIL_PASSWORD` | placeholder | notification-service |
+
+Email credentials must be set before running `notification-service`. Use a Gmail App Password (not the account password).
+
+## MapStruct + Lombok
+
+Both are wired as annotation processor paths in the root `pom.xml`. Lombok must be declared **before** MapStruct in the processor path (enforced via `lombok-mapstruct-binding`). Do not reorder them.

@@ -61,16 +61,21 @@ infrastructure/  → Adaptadores: REST (in), Kafka consumers/producers (in/out),
                                                                │     └─ FailedInventory →       │
                                                                │        inventory-reservation-  │
                                                                │        failed-topic            │
-                                                               └──────┬───────────────────┬────┘
-                                                                      │                   │
-                                                     inventory-reserved-topic    inventory-reservation-failed-topic
-                                                                      │                   │
-                                                                      ▼                   ▼
-                                                        ┌──────────────────────┐  ┌───────────────────┐
-                                                        │ notification-service  │  │   order-service   │
-                                                        │ Envía email al cliente│  │ Actualiza orden a │
-                                                        │ (Gmail SMTP)          │  │ CANCELLED/FAILED  │
-                                                        └──────────────────────┘  └───────────────────┘
+                                                               └──────────────┬────────────────┘
+                                                                              │
+                                                                   inventory-reserved-topic
+                                                                              │
+                                                                              ▼
+                                                               ┌───────────────────────────────┐
+                                                               │       notification-service     │
+                                                               │  1. Consume inventory-reserved │
+                                                               │  2. Persiste notificación      │
+                                                               │  3. Envía email (Gmail SMTP)   │
+                                                               │  4. Envía SMS (simulado)       │
+                                                               │  5. RabbitMQ → order-service   │
+                                                               │     (actualiza orden a         │
+                                                               │      CONFIRMED)                │
+                                                               └───────────────────────────────┘
 ```
 
 ### Comunicación interna dentro de cada servicio
@@ -89,21 +94,20 @@ UseCase → applicationEventPublisher.publishEvent(event)
 
 ## Tópicos de Kafka
 
-| Tópico                                | Particiones | Productor            | Consumidor(es)                      | Descripción                                      |
-|---------------------------------------|-------------|----------------------|-------------------------------------|--------------------------------------------------|
-| `orders-created-topic`                | 1           | order-service        | inventory-service                   | Orden recién creada; dispara la reserva de stock |
-| `orders-created-topic-try`            | —           | inventory-service    | inventory-service                   | Reintentos automáticos (`@RetryableTopic`)       |
-| `orders-created-topic-dlt`            | —           | inventory-service    | inventory-service (`@DltHandler`)   | Dead Letter Topic tras agotar reintentos         |
-| `orders-confirmed-topic`              | 1           | order-service        | —                                   | Orden confirmada (uso futuro)                    |
-| `orders-cancelled-topic`              | 2           | order-service        | —                                   | Orden cancelada                                  |
-| `orders-completed-topic`              | 1           | order-service        | —                                   | Orden completada                                 |
-| `orders-backup-topic`                 | 1           | order-service        | —                                   | Respaldo de órdenes                              |
-| `inventory-reserved-topic`            | 1           | inventory-service    | notification-service                | Stock reservado correctamente                    |
-| `inventory-reservation-failed-topic`  | 1           | inventory-service    | order-service                       | Reserva de stock fallida                         |
-| `notifications-confirmed-orders-topic`| —           | notification-service | —                                   | Confirmación de notificación enviada             |
-| `orders-log-error-topic`              | 1           | order-service        | —                                   | Registro de errores de order-service             |
-| `inventory-log-error-topic`           | 3           | inventory-service    | —                                   | Registro de errores de inventory-service         |
-| `notifications-log-error-topic`       | 1           | notification-service | —                                   | Registro de errores de notification-service      |
+| Tópico                                | Particiones | Productor                              | Consumidor(es)                         | Descripción                                               |
+|---------------------------------------|-------------|----------------------------------------|----------------------------------------|-----------------------------------------------------------|
+| `orders-created-topic`                | 1           | order-service                          | inventory-service                      | Orden recién creada; dispara la reserva de stock          |
+| `orders-created-topic-try-0`          | —           | inventory-service                      | inventory-service                      | Primer reintento automático (`@RetryableTopic`, 3 s)      |
+| `orders-created-topic-try-1`          | —           | inventory-service                      | inventory-service                      | Segundo reintento automático (`@RetryableTopic`, 6 s)     |
+| `orders-created-topic-dlt`            | —           | inventory-service                      | inventory-service (`@DltHandler`)      | Dead Letter Topic tras agotar reintentos                  |
+| `orders-backup-topic`                 | 1           | inventory-service                      | —                                      | Parking lot: respaldo de eventos tras agotar DLT          |
+| `inventory-reserved-topic`            | 1           | inventory-service                      | notification-service                   | Stock reservado correctamente                             |
+| `inventory-reserved-topic-try-0`      | —           | notification-service                   | notification-service                   | Primer reintento automático (`@RetryableTopic`, 3 s)      |
+| `inventory-reserved-topic-try-1`      | —           | notification-service                   | notification-service                   | Segundo reintento automático (`@RetryableTopic`, 6 s)     |
+| `inventory-reserved-topic-dlt`        | —           | notification-service                   | notification-service (`@DltHandler`)   | Dead Letter Topic tras agotar reintentos de notificación  |
+| `inventory-reservation-failed-topic`  | 1           | inventory-service, notification-service| —                                      | Reserva fallida o notificación fallida tras agotar DLT    |
+| `orders-log-error-topic`              | 1           | order-service                          | —                                      | Registro de errores de order-service                      |
+| `inventory-log-error-topic`           | 3           | inventory-service                      | —                                      | Registro de errores de inventory-service                  |
 
 ### Estrategia de reintentos en `inventory-service`
 
@@ -112,11 +116,28 @@ orders-created-topic  →  [intento 1]
                       →  orders-created-topic-try-0  (backoff 3s)
                       →  orders-created-topic-try-1  (backoff 6s)
                       →  orders-created-topic-dlt    (@DltHandler)
-                             ├─ si nroRetry < 3 → reenvía a orders-created-topic con header nroRetry++
-                             └─ si nroRetry >= 3 → persiste en outbox + publica FailedInventoryEvent
+                             ├─ si nroRetry < 3 → reenvía a orders-created-topic-dlt con header nroRetry++
+                             └─ si nroRetry >= 3 → persiste en outbox (MySQL) + publica FailedInventoryEvent
+                                                           │
+                                              ├─ inventory-reservation-failed-topic
+                                              └─ orders-backup-topic (parking lot vía OrderCreatedEvent)
 ```
 
-Excepciones reintentables: `NullPointerException`, `InsufficientStockException`, `ProductWithoutInventoryException`.
+Excepciones reintentables: `InsufficientStockException`, `ProductNotFoundException`.
+
+### Estrategia de reintentos en `notification-service`
+
+```
+inventory-reserved-topic  →  [intento 1]
+                          →  inventory-reserved-topic-try-0  (backoff 3s)
+                          →  inventory-reserved-topic-try-1  (backoff 6s)
+                          →  inventory-reserved-topic-dlt    (@DltHandler)
+                                 ├─ si nroRetry < 3 → reenvía a inventory-reserved-topic-dlt con header nroRetry++
+                                 └─ si nroRetry >= 3 → persiste en outbox (MongoDB) + publica a
+                                                              inventory-reservation-failed-topic
+```
+
+Excepciones reintentables: `MessagingException`, `BussinessException` (validación del evento).
 
 ### Configuración de productores
 
@@ -257,21 +278,23 @@ GET /api/orders/{id}
 2. order-service persiste orden con status=CREATED
 3. order-service publica OrderCreatedEvent → orders-created-topic
 4. inventory-service consume el evento → lanza InsufficientStockException
-5. @RetryableTopic reintenta 2 veces (3s y 6s de backoff)
+5. @RetryableTopic reintenta 2 veces → orders-created-topic-try-0 (3s) y orders-created-topic-try-1 (6s)
 6. Tras agotar reintentos → orders-created-topic-dlt
-7. @DltHandler reenvía hasta 3 veces con header nroRetry
-8. Tras 3 intentos en DLT → persiste evento en outbox + publica FailedInventoryEvent → inventory-reservation-failed-topic
+7. @DltHandler reenvía hasta 3 veces con header nroRetry (incrementando en cada intento)
+8. Tras nroRetry >= 3 → persiste evento en outbox (MySQL) + publica FailedInventoryEvent
+   → inventory-reservation-failed-topic
 ```
 
-### Caso 3: Error transitorio (NullPointerException)
+### Caso 3: Error en notificación (email falla)
 
 ```
-1. inventory-service recibe evento con datos incompletos
-2. Lanza NullPointerException (reintentable)
-3. Primer reintento → orders-created-topic-try-0 (espera 3s)
-4. Segundo reintento → orders-created-topic-try-1 (espera 6s)
-5. Si el error persiste → orders-created-topic-dlt → ciclo DLT
-6. Si se resuelve en algún reintento → flujo exitoso continúa normalmente
+1. notification-service consume ReservedInventoryEvent → inventory-reserved-topic
+2. Falla al enviar email (MessagingException o BussinessException)
+3. @RetryableTopic reintenta 2 veces → inventory-reserved-topic-try-0 (3s) y inventory-reserved-topic-try-1 (6s)
+4. Tras agotar reintentos → inventory-reserved-topic-dlt
+5. @DltHandler reenvía hasta 3 veces con header nroRetry
+6. Tras nroRetry >= 3 → persiste evento en outbox (MongoDB) + publica a
+   inventory-reservation-failed-topic
 ```
 
 ---
